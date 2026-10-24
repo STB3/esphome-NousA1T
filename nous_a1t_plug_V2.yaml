@@ -1,0 +1,379 @@
+substitutions:
+  name: nous-a1t
+  friendly_name: Nous A1T (ESPHome)
+  # Abschaltgrenze in W - Wert auf dem Typenschild des Steckers pruefen
+  max_power: "2500"
+  # Higher value gives lower watt readout
+  current_res: "0.000991"
+  # Lower value gives lower voltage readout
+  voltage_div: "1551"
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  name_add_mac_suffix: true
+  project:
+    name: "NOUS.Smart-Wifi-Socket"
+    version: "A1T"
+  # Wie beim Tuya-Plug: beim Booten den AP-Mode-Blink starten,
+  # solange noch keine WiFi-Verbindung besteht.
+  on_boot:
+    priority: 200
+    then:
+      - lambda: |-
+          if (!id(wifi_connected)) {
+            id(ap_mode_blink).execute();
+          }
+
+# A1T: ESP8285 mit 1 MB Flash (statt ESP32 beim A8T)
+esp8266:
+  board: esp8285
+  restore_from_flash: true    # Relaiszustand und total_energy ueberleben Stromausfall
+
+# Flash schonen: gespeicherte Werte nur alle 5 min schreiben
+preferences:
+  flash_write_interval: 5min
+
+# Enable logging (GPIO1/3 sind beim A1T frei, UART-Logging stoert nicht)
+logger:
+
+# Enable Home Assistant API
+api:
+  # Wie beim Tuya-Plug: erst nach 10 h ohne HA-Verbindung neu starten
+  reboot_timeout: 600min
+
+# Allow Over-The-Air updates
+ota:
+  - platform: esphome
+
+wifi:
+  power_save_mode: none
+  # Set up a wifi access point
+  ap:
+    ssid: "NOUS-Smart-Wifi-Socket"
+
+  # Verhalten wie beim Tuya-Plug: WiFi-Status verfolgen und die LED
+  # passend zu Relais-/Verbindungszustand steuern.
+  on_connect:
+    - script.stop: ap_mode_blink
+    - lambda: |-
+        id(wifi_connected) = true;
+        if (id(relay).state) {
+          // Relais AN -> LED dauerhaft AN
+          id(led_output).set_level(1.0);
+        } else {
+          // Relais AUS -> Atem-Puls starten
+          id(relay_off_pulse).execute();
+        }
+
+  on_disconnect:
+    - lambda: |-
+        id(wifi_connected) = false;
+
+# In combination with the `ap` this allows the user
+# to provision wifi credentials to the device via WiFi AP.
+captive_portal:
+
+time:
+  - platform: homeassistant
+    id: my_time
+
+globals:
+  - id: total_energy
+    type: float
+    restore_value: true
+    initial_value: "0.0"
+  # Wie beim Tuya-Plug: WiFi-Verbindungszustand fuer die LED-Logik
+  - id: wifi_connected
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+# Version 3 laedt JS/CSS vom CDN, belegt also kaum Flash.
+# Bei 1 MB Flash trotzdem der groesste Posten: wenn OTA-Updates
+# wegen Platzmangel scheitern, diesen Block zuerst entfernen.
+web_server:
+  version: 3
+  port: 80
+  include_internal: true
+
+# LED PWM-faehig fuer Atem-/Blink-Effekte.
+# ESP8266 hat kein LEDC -> Software-PWM (esp8266_pwm).
+output:
+  - platform: esp8266_pwm
+    id: led_output
+    frequency: 1000Hz
+    pin:
+      number: GPIO13
+      inverted: true
+
+binary_sensor:
+  - platform: gpio
+    id: "push_button"
+    internal: true
+    pin:
+      number: GPIO0
+      inverted: yes
+      mode: INPUT_PULLUP
+    filters:
+      - delayed_on: 50ms
+    # Verhalten wie beim Tuya-Plug:
+    on_multi_click:
+      # Kurzer Druck -> Relais umschalten (Normalbetrieb)
+      - timing:
+          - ON for at most 1s
+          - OFF for at least 0.3s
+        then:
+          - switch.toggle: relay
+
+      # Langer Druck (10 s) -> Factory Reset mit Warnblinken
+      - timing:
+          - ON for at least 10s
+        then:
+          - logger.log: "Factory reset triggered - button held for 10 seconds!"
+          - script.execute: factory_reset_warning
+
+switch:
+  - platform: gpio
+    pin: GPIO14
+    id: relay
+    name: "relay"
+    restore_mode: RESTORE_DEFAULT_OFF
+    icon: mdi:power
+    # LED-Logik wie beim Tuya-Plug
+    on_turn_on:
+      - script.stop: relay_off_pulse
+      - if:
+          condition:
+            lambda: 'return id(wifi_connected);'
+          then:
+            # Relais AN -> LED dauerhaft AN
+            - output.set_level:
+                id: led_output
+                level: 100%
+          else:
+            # Nicht verbunden -> AP-Mode-Blink weiterlaufen lassen
+            - script.execute: ap_mode_blink
+    on_turn_off:
+      - if:
+          condition:
+            lambda: 'return id(wifi_connected);'
+          then:
+            # Relais AUS -> Atem-Puls starten
+            - script.execute: relay_off_pulse
+          else:
+            # Nicht verbunden -> AP-Mode-Blink weiterlaufen lassen
+            - script.execute: ap_mode_blink
+
+sensor:
+  # Status-Sensor fuer Erreichbarkeitspruefung -> erzeugt /sensor/status
+  - platform: template
+    name: "Status"
+    id: status_sensor
+    lambda: 'return 1.0;'  # Liefert 1, solange das Geraet online ist
+    update_interval: never
+    internal: true
+
+  - platform: wifi_signal
+    name: "Wifi Signal"
+    update_interval: 60s
+    icon: mdi:wifi
+
+  - platform: uptime
+    name: "Uptime"
+    update_interval: 60s
+    icon: mdi:clock-outline
+
+  - platform: hlw8012
+    model: BL0937
+    sel_pin:
+      number: GPIO12
+      inverted: True
+    cf_pin: GPIO4
+    cf1_pin: GPIO5
+    current_resistor: ${current_res}
+    voltage_divider: ${voltage_div}
+    change_mode_every: 1
+    update_interval: 5s
+
+    current:
+      id: current
+      name: "current"
+      unit_of_measurement: A
+      accuracy_decimals: 3
+      icon: mdi:current-ac
+      filters:
+        - lambda: |-
+            if (x < 0.01) return 0;
+            else return x;
+
+    voltage:
+      id: voltage
+      name: "voltage"
+      unit_of_measurement: V
+      accuracy_decimals: 1
+      icon: mdi:flash-outline
+
+    power:
+      name: "power"
+      id: power
+      unit_of_measurement: W
+      icon: mdi:flash-outline
+      force_update: true
+      # calibrate_linear vom A8T entfernt (gehoerte zu dessen Shunt).
+      # Nach eigener Messung mit bekannter Last ggf. wieder eintragen.
+      on_value_range:
+        - above: ${max_power}
+          then:
+            - switch.turn_off: relay
+            - homeassistant.service:
+                service: persistent_notification.create
+                data:
+                  title: Message from ${name}
+                data_template:
+                  message: Switch turned off because power exceeded ${max_power}W
+
+  - platform: total_daily_energy
+    name: "energy"
+    power_id: power
+    state_class: total_increasing
+    unit_of_measurement: kWh
+    filters:
+      # Multiplication factor from W to kW is 0.001
+      - multiply: 0.001
+      - lambda: !lambda |-
+          static auto last_state = x;
+          if (x < last_state) { // x was reset
+            id(total_energy) += last_state;
+            ESP_LOGI("main", "Energy was reset: %f", id(total_energy));
+          }
+          last_state = x;
+          return id(total_energy) + x;
+
+button:
+  - platform: factory_reset
+    name: "Factory Reset"
+    id: factory_reset_button
+    #internal: true
+
+  - platform: restart
+    name: Reboot
+
+  - platform: safe_mode
+    id: button_safe_mode
+    name: Safe Mode Boot
+
+# Skripte fuer das LED-Verhalten, 1:1 vom Tuya-Plug uebernommen
+script:
+  # AP-Mode / nicht verbunden -> schnelles Blinken
+  - id: ap_mode_blink
+    mode: restart
+    then:
+      - while:
+          condition:
+            lambda: 'return !id(wifi_connected);'
+          then:
+            - output.turn_on: led_output
+            - delay: 200ms
+            - output.turn_off: led_output
+            - delay: 1000ms
+
+  # Relais AUS -> langsamer Atem-Puls
+  - id: relay_off_pulse
+    mode: restart
+    then:
+      - while:
+          condition:
+            lambda: 'return !id(relay).state && id(wifi_connected);'
+          then:
+            # Einblenden von 10% auf 100% in ca. 1,5 s
+            - output.set_level:
+                id: led_output
+                level: 10%
+            - delay: 150ms
+            - output.set_level:
+                id: led_output
+                level: 20%
+            - delay: 150ms
+            - output.set_level:
+                id: led_output
+                level: 30%
+            - delay: 150ms
+            - output.set_level:
+                id: led_output
+                level: 40%
+            - delay: 150ms
+            - output.set_level:
+                id: led_output
+                level: 50%
+            - delay: 150ms
+            - output.set_level:
+                id: led_output
+                level: 60%
+            - delay: 150ms
+            - output.set_level:
+                id: led_output
+                level: 70%
+            - delay: 150ms
+            - output.set_level:
+                id: led_output
+                level: 80%
+            - delay: 150ms
+            - output.set_level:
+                id: led_output
+                level: 90%
+            - delay: 150ms
+            - output.set_level:
+                id: led_output
+                level: 100%
+            - delay: 150ms
+            # Ausblenden von 100% auf 10% in ca. 1,5 s
+            - output.set_level:
+                id: led_output
+                level: 90%
+            - delay: 150ms
+            - output.set_level:
+                id: led_output
+                level: 80%
+            - delay: 150ms
+            - output.set_level:
+                id: led_output
+                level: 70%
+            - delay: 150ms
+            - output.set_level:
+                id: led_output
+                level: 60%
+            - delay: 150ms
+            - output.set_level:
+                id: led_output
+                level: 50%
+            - delay: 150ms
+            - output.set_level:
+                id: led_output
+                level: 40%
+            - delay: 150ms
+            - output.set_level:
+                id: led_output
+                level: 30%
+            - delay: 150ms
+            - output.set_level:
+                id: led_output
+                level: 20%
+            - delay: 150ms
+
+  # Factory-Reset-Warnung -> schnelles Blinken vor dem Reset
+  - id: factory_reset_warning
+    mode: restart
+    then:
+      - script.stop: ap_mode_blink
+      - script.stop: relay_off_pulse
+      # 5x schnell blinken als Warnung
+      - repeat:
+          count: 5
+          then:
+            - output.turn_on: led_output
+            - delay: 100ms
+            - output.turn_off: led_output
+            - delay: 100ms
+      # Factory Reset ausfuehren
+      - button.press: factory_reset_button
