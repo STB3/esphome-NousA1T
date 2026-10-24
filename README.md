@@ -177,6 +177,9 @@ Then there is no way around opening it: flash serially via UART (TX, RX, GND, 3.
 - [Migrating from Tasmota – ESPHome documentation](https://esphome.io/guides/migrate_sonoff_tasmota/)
 - [Nous A1T Tasmota → ESPHome – Home Assistant Community](https://community.home-assistant.io/t/nous-a1t-tasmota-esphome/522530)
 
+## License
+MIT – see [LICENSE](LICENSE).
+
 ---
 
 <a id="deutsch"></a>
@@ -347,3 +350,6 @@ Dann führt kein Weg am Öffnen vorbei: seriell über UART (TX, RX, GND, 3,3 V, 
 - [Nous A1T – devices.esphome.io](https://devices.esphome.io/devices/nous-a1t/)
 - [Migrating from Tasmota – ESPHome-Dokumentation](https://esphome.io/guides/migrate_sonoff_tasmota/)
 - [Nous A1T Tasmota → ESPHome – Home Assistant Community](https://community.home-assistant.io/t/nous-a1t-tasmota-esphome/522530)
+
+## Lizenz
+MIT – see [LICENSE](LICENSE).
