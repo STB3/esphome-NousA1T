@@ -1,5 +1,9 @@
 # ESPHome for the Nous A1T
 
+<p align="center">
+  <img src="images/05_nous_A1T.png" alt="Nous A1T Wi-Fi smart plug" width="300">
+</p>
+
 🇬🇧 [English](#english) | 🇩🇪 [Deutsch](#deutsch)
 
 ---
